@@ -2,9 +2,11 @@ import sys
 import base64
 import os
 import subprocess
+import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode
+from typing import Optional, Tuple, List
 
-import requests
+import aiohttp
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                QLineEdit, QPushButton, QProgressBar, QLabel,
@@ -17,7 +19,11 @@ class DownloadWorker(QObject):
     log_message = Signal(str)
     finished = Signal(bool, str)
 
-    def __init__(self, playlist_url, output_dir):
+    CONCURRENT_DOWNLOADS = 5
+    RETRY_ATTEMPTS = 3
+    TIMEOUT = 30
+
+    def __init__(self, playlist_url: str, output_dir: str):
         super().__init__()
         self.playlist_url = playlist_url
         self.output_dir = output_dir
@@ -26,7 +32,7 @@ class DownloadWorker(QObject):
     def stop(self):
         self._is_running = False
 
-    def build_segment_url(self, playlist_url, segment_path, segment_query):
+    def build_segment_url(self, playlist_url: str, segment_path: str, segment_query: str) -> str:
         """Construct full segment URL using playlist URL components"""
         parsed = urlparse(playlist_url)
         path_parts = parsed.path.split('/')
@@ -45,7 +51,30 @@ class DownloadWorker(QObject):
             query=urlencode(combined_params, doseq=True)
         ).geturl()
 
-    def download_track(self, track_type, track_data, playlist_url):
+    async def download_segment(self, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
+                              idx: int, url: str) -> Tuple[int, Optional[bytes]]:
+        """Download a single segment with retries and rate limiting"""
+        async with semaphore:
+            for retry in range(self.RETRY_ATTEMPTS):
+                if not self._is_running:
+                    return (idx, None)
+                
+                try:
+                    async with session.get(url, timeout=self.TIMEOUT) as response:
+                        if response.status == 200:
+                            content = await response.read()
+                            return (idx, content)
+                        else:
+                            await asyncio.sleep(2 ** retry)
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    if retry == self.RETRY_ATTEMPTS - 1:
+                        self.log_message.emit(f"Error downloading segment {idx+1}: {str(e)}")
+                        return (idx, None)
+                    await asyncio.sleep(2 ** retry)
+            return (idx, None)
+
+    async def async_download_track(self, track_type: str, track_data: dict, playlist_url: str) -> Optional[str]:
+        """Asynchronously download a track (video/audio)"""
         os.makedirs(self.output_dir, exist_ok=True)
         filename = os.path.join(self.output_dir, f'{track_type}.mp4')
 
@@ -62,32 +91,52 @@ class DownloadWorker(QObject):
             'Referer': 'https://vimeo.com/'
         }
 
-        total_segments = len(track_data['segments'])
+        segments = []
         for idx, segment in enumerate(track_data['segments']):
             if not self._is_running:
                 return None
-
+            
             segment_path, _, segment_query = segment['url'].partition('?')
             segment_url = self.build_segment_url(playlist_url, segment_path, segment_query)
-            
-            self.log_message.emit(f'Downloading {track_type} segment {idx+1}/{total_segments}')
-            try:
-                response = requests.get(segment_url, headers=headers, timeout=10)
-                if response.status_code == 200:
-                    with open(filename, 'ab') as f:
-                        f.write(response.content)
-                    progress = int((idx + 1) / total_segments * 100)
-                    self.progress_updated.emit(0 if track_type == 'video' else 1, progress)
-                else:
-                    self.log_message.emit(f'Failed to download segment {idx+1} (HTTP {response.status_code})')
+            segments.append((idx, segment_url))
+
+        connector = aiohttp.TCPConnector(limit=self.CONCURRENT_DOWNLOADS)
+        async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
+            semaphore = asyncio.Semaphore(self.CONCURRENT_DOWNLOADS)
+            tasks = [self.download_segment(session, semaphore, idx, url) for idx, url in segments]
+            downloaded_segments = []
+
+            for future in asyncio.as_completed(tasks):
+                if not self._is_running:
+                    for task in tasks:
+                        task.cancel()
+                    break
+                
+                idx, content = await future
+                if content is None:
+                    self.log_message.emit(f"Failed to download segment {idx+1}, aborting.")
                     return None
-            except Exception as e:
-                self.log_message.emit(f'Download error: {str(e)}')
+                
+                downloaded_segments.append((idx, content))
+                progress = int((len(downloaded_segments) / len(segments)) * 100)
+                self.progress_updated.emit(0 if track_type == 'video' else 1, progress)
+
+            if not self._is_running:
+                return None
+
+            downloaded_segments.sort(key=lambda x: x[0])
+            try:
+                with open(filename, 'ab') as f:
+                    for idx, content in downloaded_segments:
+                        f.write(content)
+            except IOError as e:
+                self.log_message.emit(f"File write error: {str(e)}")
                 return None
 
         return filename
 
-    def merge_files(self, video_path, audio_path):
+    def merge_files(self, video_path: str, audio_path: str) -> Optional[str]:
+        """Merge video and audio tracks using ffmpeg"""
         merged_dir = os.path.join(self.output_dir, 'merged')
         os.makedirs(merged_dir, exist_ok=True)
         output_path = os.path.join(merged_dir, 'final_video.mp4')
@@ -113,11 +162,13 @@ class DownloadWorker(QObject):
             self.log_message.emit("FFmpeg not found. Please install FFmpeg.")
             return None
 
-    def run(self):
+    async def async_run(self):
+        """Main async workflow"""
         try:
             self.log_message.emit("Fetching playlist data...")
-            response = requests.get(self.playlist_url, timeout=10)
-            json_data = response.json()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.playlist_url) as response:
+                    json_data = await response.json()
 
             video_track = max(
                 [v for v in json_data['video'] if v['mime_type'] == 'video/mp4'],
@@ -129,13 +180,13 @@ class DownloadWorker(QObject):
             )
 
             self.log_message.emit("\nStarting video download...")
-            video_file = self.download_track('video', video_track, self.playlist_url)
+            video_file = await self.async_download_track('video', video_track, self.playlist_url)
             if not video_file or not self._is_running:
                 self.finished.emit(False, "Video download failed")
                 return
 
             self.log_message.emit("\nStarting audio download...")
-            audio_file = self.download_track('audio', audio_track, self.playlist_url)
+            audio_file = await self.async_download_track('audio', audio_track, self.playlist_url)
             if not audio_file or not self._is_running:
                 self.finished.emit(False, "Audio download failed")
                 return
@@ -151,6 +202,15 @@ class DownloadWorker(QObject):
         except Exception as e:
             self.log_message.emit(f"Critical error: {str(e)}")
             self.finished.emit(False, str(e))
+
+    def run(self):
+        """QThread entry point with async event loop"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self.async_run())
+        finally:
+            loop.close()
 
 
 class MainWindow(QMainWindow):
