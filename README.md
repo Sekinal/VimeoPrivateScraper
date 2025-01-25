@@ -46,12 +46,16 @@ A high-performance GUI application for downloading Vimeo videos with concurrent 
 1. **Obtain Playlist URL**:
    - Play the Vimeo video in your browser
    - Open Developer Tools (F12) → Network tab
-   - Filter for `master.json?base64_init=1` requests
+   - Filter for `playlist` requests
    - Copy the full request URL
 
 2. **Run the Application**:
    ```bash
-   python main.py
+   python scraper.py
+   ```
+   or when using `uv`
+   ```bash
+   uv run scraper.py
    ```
 
 3. **GUI Workflow**:
