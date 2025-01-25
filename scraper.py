@@ -6,7 +6,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 
 import requests
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                QLineEdit, QPushButton, QProgressBar, QLabel,
                                QTextEdit, QStyle, QFileDialog, QMessageBox)
 from PySide6.QtGui import QFont, QColor, QPalette
@@ -156,8 +156,8 @@ class DownloadWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Vimeo Downloader")
-        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle("Vimeo Downloader Pro")
+        self.setGeometry(100, 100, 900, 700)
         self.setup_ui()
         self.download_thread = None
         self.worker = None
@@ -166,79 +166,177 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
-        # Dark theme
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #2D2D2D;
-                color: #FFFFFF;
-            }
-            QLineEdit {
-                background-color: #404040;
-                border: 1px solid #606060;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton {
-                background-color: #4CAF50;
+        # Modern color scheme
+        self.colors = {
+            "background": "#1A1A2E",
+            "surface": "#16213E",
+            "primary": "#0F3460",
+            "secondary": "#E94560",
+            "text": "#FFFFFF"
+        }
+
+        # Apply custom style
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {self.colors['background']};
+                color: {self.colors['text']};
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QLineEdit {{
+                background-color: {self.colors['surface']};
+                border: 2px solid {self.colors['primary']};
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 14px;
+                selection-background-color: {self.colors['secondary']};
+            }}
+            QPushButton {{
+                background-color: {self.colors['primary']};
                 border: none;
-                padding: 10px 20px;
-                border-radius: 4px;
-                color: white;
-            }
-            QPushButton:hover {
-                background-color: #45A049;
-            }
-            QPushButton:disabled {
-                background-color: #666666;
-            }
-            QProgressBar {
-                border: 1px solid #444444;
-                border-radius: 4px;
+                padding: 14px 28px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 500;
+                text-transform: uppercase;
+                transition: all 0.3s ease;
+            }}
+            QPushButton:hover {{
+                background-color: {self.colors['secondary']};
+                transform: translateY(-1px);
+            }}
+            QPushButton:pressed {{
+                transform: translateY(0);
+            }}
+            QPushButton:disabled {{
+                background-color: #555555;
+                color: #AAAAAA;
+            }}
+            QProgressBar {{
+                border: 2px solid {self.colors['primary']};
+                border-radius: 8px;
                 text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                width: 20px;
-            }
+                height: 24px;
+                font-size: 12px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {self.colors['secondary']};
+                border-radius: 6px;
+                margin: 2px;
+            }}
+            QTextEdit {{
+                background-color: {self.colors['surface']};
+                border: 2px solid {self.colors['primary']};
+                border-radius: 8px;
+                padding: 10px;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+            }}
+            QFileDialog {{
+                background-color: {self.colors['background']};
+                color: {self.colors['text']};
+            }}
         """)
+
+        # Header
+        header = QLabel("Vimeo Downloader Pro")
+        header.setStyleSheet(f"""
+            font-size: 24px;
+            font-weight: bold;
+            color: {self.colors['secondary']};
+            padding: 15px 0;
+            qproperty-alignment: AlignCenter;
+        """)
+        layout.addWidget(header)
+
+        # Input Section
+        input_group = QGroupBox("Download Settings")
+        input_group.setStyleSheet(f"""
+            QGroupBox {{
+                border: 2px solid {self.colors['primary']};
+                border-radius: 10px;
+                margin-top: 10px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                color: {self.colors['secondary']};
+            }}
+        """)
+        input_layout = QVBoxLayout(input_group)
+        input_layout.setContentsMargins(15, 15, 15, 15)
+        input_layout.setSpacing(15)
 
         # URL Input
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Enter playlist URL...")
-        layout.addWidget(self.url_input)
+        self.url_input.setPlaceholderText("Enter Vimeo playlist URL...")
+        self.url_input.setClearButtonEnabled(True)
+        input_layout.addWidget(self.url_input)
 
-        # Browse Button
-        self.browse_btn = QPushButton("Choose Output Directory")
+        # Directory Selection
+        dir_layout = QHBoxLayout()
+        self.dir_label = QLabel("Output Directory:")
+        self.dir_label.setStyleSheet(f"color: {self.colors['secondary']};")
+        self.dir_display = QLineEdit()
+        self.dir_display.setReadOnly(True)
+        self.browse_btn = QPushButton("Browse")
+        self.browse_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
         self.browse_btn.clicked.connect(self.choose_output_dir)
-        layout.addWidget(self.browse_btn)
+        dir_layout.addWidget(self.dir_label)
+        dir_layout.addWidget(self.dir_display)
+        dir_layout.addWidget(self.browse_btn)
+        input_layout.addLayout(dir_layout)
 
-        # Download Button
-        self.download_btn = QPushButton("Start Download")
-        self.download_btn.clicked.connect(self.toggle_download)
-        layout.addWidget(self.download_btn)
+        layout.addWidget(input_group)
 
-        # Progress Bars
+        # Progress Section
+        progress_group = QGroupBox("Download Progress")
+        progress_group.setStyleSheet(input_group.styleSheet())
+        progress_layout = QVBoxLayout(progress_group)
+        progress_layout.setContentsMargins(15, 15, 15, 15)
+        progress_layout.setSpacing(15)
+
+        # Video Progress
         self.video_progress = QProgressBar()
-        self.video_progress.setFormat("Video: %p%")
-        layout.addWidget(self.video_progress)
+        self.video_progress.setFormat("Video Progress: %p%")
+        progress_layout.addWidget(self.video_progress)
 
+        # Audio Progress
         self.audio_progress = QProgressBar()
-        self.audio_progress.setFormat("Audio: %p%")
-        layout.addWidget(self.audio_progress)
+        self.audio_progress.setFormat("Audio Progress: %p%")
+        progress_layout.addWidget(self.audio_progress)
+
+        layout.addWidget(progress_group)
+
+        # Control Buttons
+        btn_layout = QHBoxLayout()
+        self.download_btn = QPushButton("Start Download")
+        self.download_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.download_btn.clicked.connect(self.toggle_download)
+        btn_layout.addWidget(self.download_btn)
+
+        layout.addLayout(btn_layout)
 
         # Log Output
+        log_group = QGroupBox("Activity Log")
+        log_group.setStyleSheet(input_group.styleSheet())
+        log_layout = QVBoxLayout(log_group)
         self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setFont(QFont("Consolas", 10))
-        layout.addWidget(self.log_output)
+        self.log_output.setPlaceholderText("Download activity will appear here...")
+        log_layout.addWidget(self.log_output)
+        layout.addWidget(log_group)
 
         # Status Bar
         self.status_bar = QLabel()
+        self.status_bar.setStyleSheet(f"color: {self.colors['secondary']}; font-weight: bold;")
         layout.addWidget(self.status_bar)
 
         # Set default output dir
         self.output_dir = os.path.expanduser("~/Downloads/VimeoDownloads")
+        self.dir_display.setText(self.output_dir)
 
     def choose_output_dir(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
