@@ -5,6 +5,7 @@ import subprocess
 import asyncio
 from urllib.parse import urlparse, parse_qs, urlencode
 from typing import Optional, Tuple, List
+import datetime
 
 import aiohttp
 from PySide6.QtCore import Qt, QThread, Signal, QObject
@@ -135,11 +136,16 @@ class DownloadWorker(QObject):
 
         return filename
 
+    # Modify the merge_files method in the DownloadWorker class
     def merge_files(self, video_path: str, audio_path: str) -> Optional[str]:
         """Merge video and audio tracks using ffmpeg"""
-        merged_dir = os.path.join(self.output_dir, 'merged')
+        merged_dir = os.path.join(self.output_dir, 'videos')
         os.makedirs(merged_dir, exist_ok=True)
-        output_path = os.path.join(merged_dir, 'final_video.mp4')
+        
+        # Add timestamp to filename
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f'final_video_{timestamp}.mp4'
+        output_path = os.path.join(merged_dir, output_filename)
 
         try:
             subprocess.run(
@@ -154,6 +160,20 @@ class DownloadWorker(QObject):
                 check=True,
                 capture_output=True
             )
+            
+            # Delete temporary files after successful merge
+            try:
+                os.remove(video_path)
+                self.log_message.emit(f"Deleted temporary video file: {video_path}")
+            except OSError as e:
+                self.log_message.emit(f"Error deleting video file: {str(e)}")
+                
+            try:
+                os.remove(audio_path)
+                self.log_message.emit(f"Deleted temporary audio file: {audio_path}")
+            except OSError as e:
+                self.log_message.emit(f"Error deleting audio file: {str(e)}")
+
             return output_path
         except subprocess.CalledProcessError as e:
             self.log_message.emit(f"Merge failed: {e.stderr.decode()}")
